@@ -622,127 +622,306 @@ elif page == "New Trip":
     st.markdown("""
     <div style='background:#FFFFFF;border:1px solid #E8E2D4;
                 border-radius:8px;padding:28px;
-                max-width:600px;margin-bottom:24px;'>
+                max-width:700px;margin-bottom:24px;'>
         <div style='font-family:"DM Mono",monospace;font-size:9px;
                     letter-spacing:0.12em;text-transform:uppercase;
                     color:#9A8870;margin-bottom:16px;'>
-            Step 1 of 2 — Trip Details
+            Step 1 — Trip Details
         </div>
     """, unsafe_allow_html=True)
 
-    trip_name     = st.text_input(
+    trip_name = st.text_input(
         "Trip Name",
-        placeholder="e.g. Ranthambore Tiger Reserve — April 2026"
+        placeholder="e.g. Corbett April 2026, Masai Mara Safari"
     )
     trip_location = st.text_input(
         "Location (optional)",
         placeholder="e.g. Rajasthan, India"
     )
-    folder_path   = st.text_input(
-        "Photo Folder Path",
-        placeholder=(
-            r"e.g. C:\Photos\Ranthambore2026  or  /Volumes/SD_CARD/DCIM"
-        )
-    )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Preview folder
-    if folder_path and os.path.isdir(folder_path):
-        from src.services.ingestor import discover_files
-        files = discover_files(folder_path)
-        st.markdown(f"""
-        <div style='background:#EEF5E8;border:1px solid {SAGE};
-                    border-radius:6px;padding:14px 18px;
-                    max-width:600px;margin-bottom:20px;'>
-            <span style='font-family:"DM Mono",monospace;
-                         font-size:10px;color:{FOREST};font-weight:500;'>
-                ✓ Found {len(files)} photos in this folder
-            </span>
+    # ── Step 2: Upload Method ─────────────────────────────────────────
+    st.markdown("""
+    <div style='background:#FFFFFF;border:1px solid #E8E2D4;
+                border-radius:8px;padding:28px;
+                max-width:700px;margin-bottom:24px;'>
+        <div style='font-family:"DM Mono",monospace;font-size:9px;
+                    letter-spacing:0.12em;text-transform:uppercase;
+                    color:#9A8870;margin-bottom:16px;'>
+            Step 2 — Choose Upload Method
+        </div>
+    """, unsafe_allow_html=True)
+
+    upload_method = st.radio(
+        "Upload Method",
+        ["📁 Folder Path (Local Only)", "📤 Upload Files (Cloud & Local)"],
+        label_visibility="collapsed",
+        horizontal=True
+    )
+
+    folder_path = None
+    uploaded_files = None
+
+    if "Folder Path" in upload_method:
+        # ── Option 1: Folder Path (Local Deployment) ──────────────────
+        st.markdown("""
+        <div style='background:#FFF4E6;border:1px solid #C87020;
+                    border-radius:6px;padding:12px;margin:16px 0;'>
+            <div style='font-family:"DM Mono",monospace;font-size:10px;
+                        color:#C87020;font-weight:500;'>
+                ⚠️ Local Deployment Only
+            </div>
+            <div style='font-size:11px;color:#5C5040;margin-top:6px;
+                        line-height:1.5;'>
+                Folder paths only work when running AIPP on your own computer.
+                For Streamlit Cloud, use 'Upload Files' instead.
+            </div>
         </div>
         """, unsafe_allow_html=True)
+        
+        folder_path = st.text_input(
+            "Photo Folder Path",
+            placeholder=r"e.g. C:\Photos\Corbett2026  or  /Volumes/SD_CARD/DCIM"
+        )
 
-        if st.button(
-            f"🚀  Begin Processing {len(files)} Photos",
-            type="primary"
-        ) and trip_name:
-            trip_id = str(uuid.uuid4())
-            session = get_session()
-            trip = Trip(
-                id=trip_id,
-                name=trip_name,
-                location=trip_location,
-                folder_path=folder_path,
-                photo_count=len(files),
-                created_at=datetime.now(),
-            )
-            session.add(trip)
-            session.commit()
-            session.close()
-
-            # Ingest
-            st.markdown(
-                "<h3>Phase 1 — Local Analysis</h3>",
-                unsafe_allow_html=True
-            )
-            prog_bar = st.progress(0)
-            status   = st.empty()
-
-            def update_progress(current, total):
-                pct = current / total
-                prog_bar.progress(pct)
-                status.markdown(
-                    f"<div style='font-family:\"DM Mono\",monospace;"
-                    f"font-size:11px;color:#9A8870;'>"
-                    f"Analysing {current:,} / {total:,} photos…"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-
-            result = ingest_folder(
-                trip_id, folder_path, update_progress
-            )
-            prog_bar.progress(1.0)
-            status.empty()
-
-            # Update trip
-            session = get_session()
-            t = session.query(Trip).filter(
-                Trip.id == trip_id
-            ).first()
-            if t:
-                t.photo_count = result["total"]
-            session.commit()
-            session.close()
-
+        # Preview folder
+        if folder_path and os.path.isdir(folder_path):
+            from src.services.ingestor import discover_files
+            files = discover_files(folder_path)
             st.markdown(f"""
             <div style='background:#EEF5E8;border:1px solid {SAGE};
-                        border-radius:8px;padding:20px;
-                        max-width:600px;margin:16px 0;'>
-                <div style='font-family:"Cormorant Garamond",serif;
-                            font-size:20px;color:{FOREST};
-                            margin-bottom:8px;'>
-                    ✓ Local Analysis Complete
-                </div>
-                <div style='font-family:"DM Sans",sans-serif;
-                            font-size:13px;color:#5C5040;'>
-                    <strong>{result['ingested']:,}</strong> photos ready
-                    for AI scoring ·
-                    <strong>{result['skipped']:,}</strong> auto-removed
-                    (blurry or duplicate)
-                </div>
+                        border-radius:6px;padding:14px 18px;
+                        margin:16px 0;'>
+                <span style='font-family:"DM Mono",monospace;
+                             font-size:10px;color:{FOREST};font-weight:500;'>
+                    ✓ Found {len(files)} photos in this folder
+                </span>
             </div>
             """, unsafe_allow_html=True)
 
-            st.info(
-                "✦ Go to **Gallery** → click **Run AI Scoring** "
-                "to score the remaining photos with Claude vision. "
-                "This is the slow step — best run overnight for large trips."
-            )
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    elif folder_path and not os.path.isdir(folder_path):
-        st.error("⚠️ Folder not found. Check the path and try again.")
+            if st.button(
+                f"🚀  Begin Processing {len(files)} Photos",
+                type="primary"
+            ) and trip_name:
+                trip_id = str(uuid.uuid4())
+                session = get_session()
+                trip = Trip(
+                    id=trip_id,
+                    name=trip_name,
+                    location=trip_location,
+                    folder_path=folder_path,
+                    photo_count=len(files),
+                    created_at=datetime.now(),
+                )
+                session.add(trip)
+                session.commit()
+                session.close()
 
+                # Ingest
+                st.markdown(
+                    "<h3>Phase 1 — Local Analysis</h3>",
+                    unsafe_allow_html=True
+                )
+                prog_bar = st.progress(0)
+                status = st.empty()
+
+                def update_progress(current, total):
+                    pct = current / total
+                    prog_bar.progress(pct)
+                    status.markdown(
+                        f"<div style='font-family:\"DM Mono\",monospace;"
+                        f"font-size:11px;color:#9A8870;'>"
+                        f"Analysing {current:,} / {total:,} photos…"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                result = ingest_folder(
+                    trip_id, folder_path, update_progress
+                )
+                prog_bar.progress(1.0)
+                status.empty()
+
+                # Update trip
+                session = get_session()
+                t = session.query(Trip).filter(
+                    Trip.id == trip_id
+                ).first()
+                if t:
+                    t.photo_count = result["total"]
+                session.commit()
+                session.close()
+
+                st.markdown(f"""
+                <div style='background:#EEF5E8;border:1px solid {SAGE};
+                            border-radius:8px;padding:20px;
+                            margin:16px 0;'>
+                    <div style='font-family:"Cormorant Garamond",serif;
+                                font-size:20px;color:{FOREST};
+                                margin-bottom:8px;'>
+                        ✓ Local Analysis Complete
+                    </div>
+                    <div style='font-family:"DM Sans",sans-serif;
+                                font-size:13px;color:#5C5040;'>
+                        <strong>{result['ingested']:,}</strong> photos ready
+                        for AI scoring ·
+                        <strong>{result['skipped']:,}</strong> auto-removed
+                        (blurry or duplicate)
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.info(
+                    "✦ Go to **Gallery** → click **Run AI Scoring** "
+                    "to score the remaining photos with Claude vision. "
+                    "This is the slow step — best run overnight for large trips."
+                )
+
+        elif folder_path and not os.path.isdir(folder_path):
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.error("⚠️ Folder not found. Check the path and try again.")
+        else:
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    else:
+        # ── Option 2: File Uploader (Cloud & Local) ───────────────────
+        st.markdown("""
+        <div style='background:#EEF5E8;border:1px solid #7A9E6A;
+                    border-radius:6px;padding:12px;margin:16px 0;'>
+            <div style='font-family:"DM Mono",monospace;font-size:10px;
+                        color:#2D5016;font-weight:500;'>
+                ✅ Recommended for Cloud Deployment
+            </div>
+            <div style='font-size:11px;color:#2D5016;margin-top:6px;
+                        line-height:1.5;'>
+                Upload JPG files (2-5MB each). Max 500MB total.
+                Select multiple files: Ctrl+Click (Windows) or Cmd+Click (Mac)
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        uploaded_files = st.file_uploader(
+            "Choose photos to upload",
+            type=["jpg", "jpeg", "png", "JPG", "JPEG", "PNG"],
+            accept_multiple_files=True,
+            label_visibility="collapsed"
+        )
+
+        if uploaded_files:
+            st.markdown(f"""
+            <div style='background:#EEF5E8;border:1px solid {SAGE};
+                        border-radius:6px;padding:14px 18px;
+                        margin:16px 0;'>
+                <span style='font-family:"DM Mono",monospace;
+                             font-size:10px;color:{FOREST};font-weight:500;'>
+                    ✓ {len(uploaded_files)} photos ready to process
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            if st.button(
+                f"🚀  Begin Processing {len(uploaded_files)} Photos",
+                type="primary"
+            ) and trip_name:
+                
+                # Create trip
+                trip_id = str(uuid.uuid4())
+                session = get_session()
+                trip = Trip(
+                    id=trip_id,
+                    name=trip_name,
+                    location=trip_location,
+                    folder_path=None,  # No folder path for uploaded files
+                    photo_count=len(uploaded_files),
+                    created_at=datetime.now(),
+                )
+                session.add(trip)
+                session.commit()
+                session.close()
+
+                # Create uploads directory if it doesn't exist
+                uploads_dir = Path("uploads") / trip_id
+                uploads_dir.mkdir(parents=True, exist_ok=True)
+
+                # Save uploaded files and process
+                st.markdown(
+                    "<h3>Phase 1 — Processing Uploaded Photos</h3>",
+                    unsafe_allow_html=True
+                )
+                prog_bar = st.progress(0)
+                status = st.empty()
+
+                ingested = 0
+                skipped = 0
+
+                for idx, uploaded_file in enumerate(uploaded_files):
+                    # Update progress
+                    pct = (idx + 1) / len(uploaded_files)
+                    prog_bar.progress(pct)
+                    status.markdown(
+                        f"<div style='font-family:\"DM Mono\",monospace;"
+                        f"font-size:11px;color:#9A8870;'>"
+                        f"Processing {idx + 1:,} / {len(uploaded_files):,} photos…"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    # Save file to uploads directory
+                    file_path = uploads_dir / uploaded_file.name
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                    # Ingest the file
+                    from src.services.ingestor import ingest_single_file
+                    try:
+                        ingest_single_file(trip_id, str(file_path))
+                        ingested += 1
+                    except Exception as e:
+                        skipped += 1
+                        st.warning(f"Skipped {uploaded_file.name}: {str(e)}")
+
+                prog_bar.progress(1.0)
+                status.empty()
+
+                # Update trip count
+                session = get_session()
+                t = session.query(Trip).filter(
+                    Trip.id == trip_id
+                ).first()
+                if t:
+                    t.photo_count = ingested
+                session.commit()
+                session.close()
+
+                st.markdown(f"""
+                <div style='background:#EEF5E8;border:1px solid {SAGE};
+                            border-radius:8px;padding:20px;
+                            margin:16px 0;'>
+                    <div style='font-family:"Cormorant Garamond",serif;
+                                font-size:20px;color:{FOREST};
+                                margin-bottom:8px;'>
+                        ✓ Upload Complete
+                    </div>
+                    <div style='font-family:"DM Sans",sans-serif;
+                                font-size:13px;color:#5C5040;'>
+                        <strong>{ingested:,}</strong> photos ready
+                        for AI scoring ·
+                        <strong>{skipped:,}</strong> skipped
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.info(
+                    "✦ Go to **Gallery** → click **Run AI Scoring** "
+                    "to score photos with Claude vision."
+                )
+        else:
+            st.markdown("</div>", unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════
 # PAGE: GALLERY
 # ══════════════════════════════════════════════════════════════════════════

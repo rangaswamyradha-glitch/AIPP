@@ -275,4 +275,48 @@ def ingest_folder(trip_id: str, folder: str,
 
     session.commit()
     session.close()
-    return {"total": total, "ingested": ingested, "skipped": skipped}
+         return {"total": total, "ingested": ingested, "skipped": skipped}
+def ingest_single_file(trip_id: str, filepath: str) -> dict:
+    """
+    Ingest a single uploaded photo file.
+    Used by file uploader in New Trip page.
+    
+    Returns dict with success status and photo_id.
+    """
+    session = get_session()
+    seen_hashes = set()  # Empty set for single file (no duplicate check)
+    
+    try:
+        photo = process_single(filepath, trip_id, seen_hashes)
+        
+        if photo:
+            session.add(photo)
+            session.commit()
+            
+            result = {
+                "success": True,
+                "photo_id": photo.id,
+                "skipped": photo.auto_deleted,
+                "reason": photo.skip_reason if photo.auto_deleted else None
+            }
+        else:
+            result = {
+                "success": False,
+                "photo_id": None,
+                "skipped": True,
+                "reason": "Failed to load image"
+            }
+        
+        return result
+        
+    except Exception as e:
+        session.rollback()
+        return {
+            "success": False,
+            "photo_id": None,
+            "skipped": True,
+            "reason": str(e)
+        }
+    finally:
+        session.close()  
+       
