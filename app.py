@@ -8,7 +8,11 @@ import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # Only loads if .env exists locally
+except ImportError:
+    pass  # Streamlit Cloud doesn't need this
 # ══════════════════════════════════════════════════════════════════════════
 # GLOBAL CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════

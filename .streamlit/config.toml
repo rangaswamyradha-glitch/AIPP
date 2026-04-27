@@ -1,8 +1,4 @@
-﻿# ══════════════════════════════════════════════════════════════════════════
-# Streamlit Configuration for AIPP
-# ══════════════════════════════════════════════════════════════════════════
-
-[theme]
+﻿[theme]
 primaryColor = "#2D5016"
 backgroundColor = "#FAF8F3"
 secondaryBackgroundColor = "#FFFFFF"
