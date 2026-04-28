@@ -740,7 +740,7 @@ elif page == "New Trip":
                 session.close()
 
                 # Create uploads directory
-                uploads_dir = Path("uploads") / trip_id
+                uploads_dir = Path(os.getcwd()) / "uploads" / trip_id
                 uploads_dir.mkdir(parents=True, exist_ok=True)
 
                 # Process uploaded files
@@ -928,7 +928,7 @@ elif page == "New Trip":
                 session.close()
 
                 # Create uploads directory if it doesn't exist
-                uploads_dir = Path("uploads") / trip_id
+                uploads_dir = Path(os.getcwd()) / "uploads" / trip_id
                 uploads_dir.mkdir(parents=True, exist_ok=True)
 
                 # Save uploaded files and process
