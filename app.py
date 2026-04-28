@@ -139,7 +139,7 @@ with st.sidebar:
         "Navigate",
         ["🏠  Dashboard", "📁  New Trip",
          "🖼  Gallery", "📊  Analytics",
-         "⭐  Rate Photos"],
+         "⭐  Rate Photos", "📝  Story Studio"],
         label_visibility="collapsed"
     )
 
@@ -702,84 +702,137 @@ elif page == "New Trip":
 
             st.markdown("</div>", unsafe_allow_html=True)
 
+            st.markdown("""
+            <style>
+            button[data-testid="baseButton-primary"] {
+                background-color: #2D5016 !important;
+                color: #FFFFFF !important;
+                font-weight: 600 !important;
+            }
+            button[data-testid="baseButton-primary"] * {
+                color: #FFFFFF !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
             if st.button(
-                f"🚀  Begin Processing {len(files)} Photos",
-                type="primary"
-            ) and trip_name:
+                f"🚀  Begin Processing {len(uploaded_files)} Photos",
+                type="primary",
+                key="process_upload_btn"
+            ):
+                if not trip_name or trip_name.strip() == "":
+                    st.error("❌ Trip name is required. Please enter a trip name above.")
+                    st.stop()
+
+                # Create trip
                 trip_id = str(uuid.uuid4())
                 session = get_session()
                 trip = Trip(
                     id=trip_id,
                     name=trip_name,
                     location=trip_location,
-                    folder_path=folder_path,
-                    photo_count=len(files),
+                    folder_path=None,
+                    photo_count=len(uploaded_files),
                     created_at=datetime.now(),
                 )
                 session.add(trip)
                 session.commit()
                 session.close()
 
-                # Ingest
+                # Create uploads directory
+                uploads_dir = Path("uploads") / trip_id
+                uploads_dir.mkdir(parents=True, exist_ok=True)
+
+                # Process uploaded files
                 st.markdown(
-                    "<h3>Phase 1 — Local Analysis</h3>",
+                    "<div style='font-family:\"DM Mono\",monospace;font-size:9px;"
+                    "letter-spacing:0.14em;text-transform:uppercase;color:#C8BEA8;"
+                    "margin-top:16px;margin-bottom:10px;'>"
+                    "Phase 1 — Processing Uploaded Photos</div>",
                     unsafe_allow_html=True
                 )
                 prog_bar = st.progress(0)
                 status = st.empty()
 
-                def update_progress(current, total):
-                    pct = current / total
+                ingested = 0
+                skipped = 0
+                errors = []
+
+                for idx, uploaded_file in enumerate(uploaded_files):
+                    pct = (idx + 1) / len(uploaded_files)
                     prog_bar.progress(pct)
                     status.markdown(
                         f"<div style='font-family:\"DM Mono\",monospace;"
                         f"font-size:11px;color:#9A8870;'>"
-                        f"Analysing {current:,} / {total:,} photos…"
-                        f"</div>",
+                        f"Processing {idx + 1:,} / {len(uploaded_files):,} — "
+                        f"{uploaded_file.name}</div>",
                         unsafe_allow_html=True
                     )
 
-                result = ingest_folder(
-                    trip_id, folder_path, update_progress
-                )
+                    # Save file to uploads directory
+                    file_path = uploads_dir / uploaded_file.name
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                    # Ingest the file
+                    from src.services.ingestor import ingest_single_file
+                    try:
+                        result = ingest_single_file(trip_id, str(file_path))
+                        if result["success"] and not result["skipped"]:
+                            ingested += 1
+                        elif result["skipped"]:
+                            skipped += 1
+                            if result.get("reason"):
+                                errors.append(f"{uploaded_file.name}: {result['reason']}")
+                        else:
+                            skipped += 1
+                            errors.append(f"{uploaded_file.name}: {result.get('reason', 'Unknown error')}")
+                    except Exception as e:
+                        skipped += 1
+                        errors.append(f"{uploaded_file.name}: {str(e)}")
+
                 prog_bar.progress(1.0)
                 status.empty()
 
-                # Update trip
+                # Update trip count
                 session = get_session()
-                t = session.query(Trip).filter(
-                    Trip.id == trip_id
-                ).first()
+                t = session.query(Trip).filter(Trip.id == trip_id).first()
                 if t:
-                    t.photo_count = result["total"]
+                    t.photo_count = ingested
                 session.commit()
                 session.close()
 
-                st.markdown(f"""
-                <div style='background:#EEF5E8;border:1px solid {SAGE};
-                            border-radius:8px;padding:20px;
-                            margin:16px 0;'>
-                    <div style='font-family:"Cormorant Garamond",serif;
-                                font-size:20px;color:{FOREST};
-                                margin-bottom:8px;'>
-                        ✓ Local Analysis Complete
+                # Show results
+                if ingested > 0:
+                    st.markdown(f"""
+                    <div style='background:#EEF5E8;border:1px solid {SAGE};
+                                border-radius:8px;padding:20px;margin:16px 0;'>
+                        <div style='font-family:"Cormorant Garamond",serif;
+                                    font-size:20px;color:{FOREST};margin-bottom:8px;'>
+                            ✓ Upload Complete
+                        </div>
+                        <div style='font-size:13px;color:#5C5040;'>
+                            <strong>{ingested:,}</strong> photos ready for AI scoring ·
+                            <strong>{skipped:,}</strong> skipped
+                        </div>
                     </div>
-                    <div style='font-family:"DM Sans",sans-serif;
-                                font-size:13px;color:#5C5040;'>
-                        <strong>{result['ingested']:,}</strong> photos ready
-                        for AI scoring ·
-                        <strong>{result['skipped']:,}</strong> auto-removed
-                        (blurry or duplicate)
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
 
-                st.info(
-                    "✦ Go to **Gallery** → click **Run AI Scoring** "
-                    "to score the remaining photos with Claude vision. "
-                    "This is the slow step — best run overnight for large trips."
-                )
+                    st.info(
+                        "✦ Select this trip from **Active Trip** dropdown in the sidebar, "
+                        "then go to **Gallery** → click **Run AI Scoring**"
+                    )
+                else:
+                    st.error(
+                        f"❌ All {len(uploaded_files)} photos were skipped. "
+                        f"See errors below."
+                    )
 
+                # Show errors if any
+                if errors:
+                    with st.expander(f"⚠️ {len(errors)} photos had issues — click to see details"):
+                        for err in errors:
+                            st.text(err)
         elif folder_path and not os.path.isdir(folder_path):
             st.markdown("</div>", unsafe_allow_html=True)
             st.error("⚠️ Folder not found. Check the path and try again.")
@@ -824,11 +877,41 @@ elif page == "New Trip":
 
             st.markdown("</div>", unsafe_allow_html=True)
 
+            # Validation check
+            if not trip_name or trip_name.strip() == "":
+                st.warning("⚠️ Please enter a trip name above before processing")
+            
+            # Button with white text CSS
+            st.markdown("""
+            <style>
+            button[data-testid="baseButton-primary"] {
+                background-color: #2D5016 !important;
+                color: #FFFFFF !important;
+                font-weight: 600 !important;
+            }
+            button[data-testid="baseButton-primary"]:hover {
+                background-color: #3D6B20 !important;
+            }
+            button[data-testid="baseButton-primary"] p {
+                color: #FFFFFF !important;
+            }
+            button[data-testid="baseButton-primary"] * {
+                color: #FFFFFF !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
+            # Button is always visible, but only processes if trip_name exists
             if st.button(
                 f"🚀  Begin Processing {len(uploaded_files)} Photos",
-                type="primary"
-            ) and trip_name:
+                type="primary",
+                key="process_upload_btn"
+            ):
+                if not trip_name or trip_name.strip() == "":
+                    st.error("❌ Trip name is required. Please enter a trip name above.")
+                    st.stop()
                 
+                # [REST OF THE PROCESSING CODE STAYS THE SAME]
                 # Create trip
                 trip_id = str(uuid.uuid4())
                 session = get_session()
@@ -836,7 +919,7 @@ elif page == "New Trip":
                     id=trip_id,
                     name=trip_name,
                     location=trip_location,
-                    folder_path=None,  # No folder path for uploaded files
+                    folder_path=None,
                     photo_count=len(uploaded_files),
                     created_at=datetime.now(),
                 )
@@ -879,8 +962,11 @@ elif page == "New Trip":
                     # Ingest the file
                     from src.services.ingestor import ingest_single_file
                     try:
-                        ingest_single_file(trip_id, str(file_path))
-                        ingested += 1
+                        result = ingest_single_file(trip_id, str(file_path))
+                        if result["success"] and not result["skipped"]:
+                            ingested += 1
+                        else:
+                            skipped += 1
                     except Exception as e:
                         skipped += 1
                         st.warning(f"Skipped {uploaded_file.name}: {str(e)}")
@@ -922,6 +1008,7 @@ elif page == "New Trip":
                 )
         else:
             st.markdown("</div>", unsafe_allow_html=True)
+
 # ══════════════════════════════════════════════════════════════════════════
 # PAGE: GALLERY
 # ══════════════════════════════════════════════════════════════════════════
@@ -943,27 +1030,49 @@ elif page == "Gallery":
     )
 
     # AI Scoring trigger
+    # Count photos that need scoring (pending OR no composite_score)
+    needs_scoring = [
+        p for p in all_photos 
+        if p.tier == "pending" or p.composite_score is None or p.composite_score == 0
+    ]
+    pending_count = len(needs_scoring)
+
     if pending_count > 0:
         st.markdown(f"""
         <div style='background:#FCF0E0;border:1px solid #E8B870;
                     border-radius:8px;padding:18px 22px;
                     margin-bottom:20px;'>
-            <strong style='color:{AMBER};'>
+            <strong style='color:{AMBER};font-size:16px;'>
                 {pending_count:,} photos ready for AI scoring
-            </strong>
-            <span style='color:#8A4C10;font-size:13px;'>
-                — estimated cost: ${pending_count * 0.002:.2f}
-                · estimated time: {pending_count // 40} mins
+            </strong><br>
+            <span style='color:#8A4C10;font-size:13px;margin-top:6px;display:block;'>
+                Estimated cost: ${pending_count * 0.002:.2f} USD · 
+                Estimated time: {max(1, pending_count // 40)} minutes
             </span>
         </div>
         """, unsafe_allow_html=True)
 
+        # White text button
+        st.markdown("""
+        <style>
+        button[data-testid="baseButton-primary"] {
+            background-color: #2D5016 !important;
+            color: #FFFFFF !important;
+            font-weight: 600 !important;
+        }
+        button[data-testid="baseButton-primary"] * {
+            color: #FFFFFF !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
         if st.button(
             f"🧠  Run AI Scoring on {pending_count:,} Photos",
-            type="primary"
+            type="primary",
+            key="run_ai_scoring"
         ):
-            prog  = st.progress(0)
-            info  = st.empty()
+            prog = st.progress(0)
+            info = st.empty()
 
             def score_progress(cur, tot):
                 prog.progress(cur / tot)
@@ -982,9 +1091,28 @@ elif page == "Gallery":
             info.empty()
             st.success(
                 f"✓ Scored {result['scored']:,} photos. "
-                f"Reload the gallery to see results."
+                f"Reloading gallery..."
             )
             st.rerun()
+    
+    elif len(all_photos) == 0:
+        st.info("📸 No photos in this trip yet. Go to **New Trip** to upload photos.")
+        st.stop()
+    
+    else:
+        # All photos are already scored
+        st.markdown(f"""
+        <div style='background:#EEF5E8;border:1px solid #7A9E6A;
+                    border-radius:8px;padding:18px 22px;
+                    margin-bottom:20px;'>
+            <strong style='color:{FOREST};font-size:16px;'>
+                ✓ All {len(all_photos):,} photos have been scored
+            </strong><br>
+            <span style='color:#2D5016;font-size:13px;margin-top:6px;display:block;'>
+                Use the filters below to browse your photos
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Filters
     col_f1, col_f2, col_f3 = st.columns([1, 1, 1])
@@ -1764,3 +1892,503 @@ elif page == "Analytics":
             "text/csv",
             use_container_width=True,
         )
+# ══════════════════════════════════════════════════════════════════════════
+# PAGE: RATE PHOTOS
+# ══════════════════════════════════════════════════════════════════════════
+elif page == "Rate Photos":
+    st.markdown("<h1>Rate Your Photos</h1>", unsafe_allow_html=True)
+
+    if not active_trip:
+        st.info("Select a trip first.")
+        st.stop()
+
+    session = get_session()
+    all_rateable = session.query(Photo).filter(
+        Photo.trip_id == active_trip.id,
+        Photo.tier.in_(["great", "good", "review"]),
+    ).order_by(Photo.composite_score.desc()).all()
+
+    unrated = [p for p in all_rateable if p.user_rating is None]
+    already_rated = [p for p in all_rateable if p.user_rating is not None]
+    session.close()
+
+    total_rateable = len(all_rateable)
+    total_unrated = len(unrated)
+    total_rated = len(already_rated)
+
+    # ── All photos rated — show summary + Review Again ────────────────
+    if total_unrated == 0:
+        # Count by rating
+        great_count = sum(1 for p in already_rated if p.user_rating == "great")
+        good_count = sum(1 for p in already_rated if p.user_rating == "good")
+        delete_count = sum(1 for p in already_rated if p.user_rating == "delete")
+
+        st.markdown(f"""
+        <div style='background:#EEF5E8;border:1px solid {SAGE};
+                    border-radius:8px;padding:24px;margin-bottom:20px;'>
+            <div style='font-family:"Cormorant Garamond",serif;
+                        font-size:22px;color:{FOREST};margin-bottom:12px;'>
+                ✓ All {total_rateable} photos have been rated!
+            </div>
+            <div style='font-size:13px;color:#5C5040;line-height:1.8;'>
+                <strong style='color:{FOREST};'>⭐ Great:</strong> {great_count} photos<br>
+                <strong style='color:{AMBER};'>👍 Good:</strong> {good_count} photos<br>
+                <strong style='color:#A83020;'>🗑 Delete:</strong> {delete_count} photos<br><br>
+                <strong>{great_count + good_count} keepers</strong> ready for Story Studio
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Review Again button
+        st.markdown("""
+        <style>
+        button[data-testid="baseButton-secondary"] {
+            font-weight: 600 !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        if st.button("🔄  Review Again — Reset All Ratings", use_container_width=True):
+            session = get_session()
+            for p_id in [p.id for p in already_rated]:
+                photo_obj = session.query(Photo).filter(Photo.id == p_id).first()
+                if photo_obj:
+                    photo_obj.user_rating = None
+                    photo_obj.rated_at = None
+                    photo_obj.tier = "review"
+            session.commit()
+            session.close()
+            st.session_state.rate_idx = 0
+            st.rerun()
+
+        st.info("✦ Go to **Story Studio** to create social media posts from your keepers!")
+        st.stop()
+
+    # ── Progress bar and counter ──────────────────────────────────────
+    if "rate_idx" not in st.session_state:
+        st.session_state.rate_idx = 0
+
+    idx = st.session_state.rate_idx
+    idx = min(idx, total_unrated - 1)
+    photo = unrated[idx]
+
+    # Progress
+    progress_pct = total_rated / max(total_rateable, 1)
+    st.progress(progress_pct)
+
+    # Clear progress counter
+    st.markdown(
+        f"<div style='display:flex;justify-content:space-between;"
+        f"align-items:center;margin-bottom:20px;'>"
+        f"<div style='font-family:\"DM Mono\",monospace;font-size:11px;"
+        f"color:#9A8870;'>"
+        f"📸 Reviewing photo <strong style='color:#1A1610;font-size:14px;'>"
+        f"{total_rated + 1}</strong> of <strong style='color:#1A1610;font-size:14px;'>"
+        f"{total_rateable}</strong>"
+        f"</div>"
+        f"<div style='font-family:\"DM Mono\",monospace;font-size:10px;"
+        f"color:#C8BEA8;'>"
+        f"✅ {total_rated} rated · ⏳ {total_unrated} remaining · "
+        f"G = Great · O = Good · D = Delete"
+        f"</div></div>",
+        unsafe_allow_html=True
+    )
+
+    col_img, col_panel = st.columns([1.8, 1])
+
+    with col_img:
+        if photo.thumbnail_path and os.path.exists(photo.thumbnail_path):
+            src = thumb_src(photo.thumbnail_path)
+            st.markdown(
+                f"<div style='border-radius:8px;overflow:hidden;"
+                f"box-shadow:0 4px 16px rgba(26,22,16,0.12);'>"
+                f"<img src='{src}' style='width:100%;display:block;'></div>",
+                unsafe_allow_html=True
+            )
+
+    with col_panel:
+        # Filename and score
+        tier_color = {"great": FOREST, "good": AMBER, "review": SKY, "delete": "#C8BEA8"}.get(photo.tier, "#C8BEA8")
+        st.markdown(
+            f"<div style='background:#FFFFFF;border:1px solid #E8E2D4;"
+            f"border-radius:8px;padding:16px;margin-bottom:12px;'>"
+            f"<div style='font-family:\"Cormorant Garamond\",serif;"
+            f"font-size:18px;font-weight:700;color:#1A1610;margin-bottom:6px;'>"
+            f"{photo.filename}</div>"
+            f"<div style='display:inline-block;background:{tier_color};"
+            f"color:white;border-radius:4px;padding:3px 10px;"
+            f"font-family:\"DM Mono\",monospace;font-size:10px;"
+            f"text-transform:uppercase;'>{photo.tier} · {photo.composite_score:.0f}</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # EXIF strip
+        st.markdown(
+            f"<div style='background:#FFFFFF;border:1px solid #E8E2D4;"
+            f"border-radius:8px;padding:14px;margin-bottom:12px;'>"
+            f"<div style='display:grid;grid-template-columns:1fr 1fr;"
+            f"gap:6px;font-family:\"DM Mono\",monospace;font-size:10px;color:#5C5040;'>"
+            f"<div>ISO {photo.exif_iso or '?'}</div>"
+            f"<div>f/{photo.exif_aperture or '?'}</div>"
+            f"<div>{photo.exif_shutter or '?'}s</div>"
+            f"<div>{photo.exif_focal_len or '?'}mm</div></div></div>",
+            unsafe_allow_html=True
+        )
+
+        # AI scores
+        if photo.score_breakdown:
+            breakdown_html = ""
+            for dim, val in photo.score_breakdown.items():
+                color = "#2D5016" if val >= 15 else "#C87020" if val >= 8 else "#A83020"
+                breakdown_html += (
+                    f"<div style='margin-bottom:6px;'>"
+                    f"<div style='display:flex;justify-content:space-between;margin-bottom:2px;'>"
+                    f"<span style='font-size:10px;color:#5C5040;'>{dim}</span>"
+                    f"<span style='font-family:\"DM Mono\",monospace;font-size:10px;"
+                    f"color:{color};font-weight:600;'>{val}/25</span></div>"
+                    f"<div style='height:6px;background:#F5F2EA;border-radius:3px;overflow:hidden;'>"
+                    f"<div style='width:{val/25*100:.0f}%;height:100%;background:{color};"
+                    f"border-radius:3px;'></div></div></div>"
+                )
+            st.markdown(breakdown_html, unsafe_allow_html=True)
+
+        # AI explanation
+        if photo.ai_explanation:
+            st.markdown(
+                f"<div style='background:#FAF8F3;border:1px solid #E8E2D4;"
+                f"border-radius:6px;padding:12px;font-size:12px;color:#5C5040;"
+                f"line-height:1.6;font-style:italic;margin-bottom:12px;'>"
+                f"{photo.ai_explanation}</div>",
+                unsafe_allow_html=True
+            )
+
+        # Edit suggestions
+        if photo.edit_suggestions:
+            with st.expander("✦ Editing Recommendations"):
+                edits = photo.edit_suggestions
+                if edits.get("lightroom"):
+                    st.markdown(f"**Lightroom:** {edits['lightroom']}")
+                if edits.get("topaz"):
+                    st.markdown(f"**Topaz:** {edits['topaz']}")
+                if edits.get("crop"):
+                    st.markdown(f"**Crop:** {edits['crop']}")
+
+    # Rating buttons
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    def rate(rating: str):
+        session = get_session()
+        p = session.query(Photo).filter(Photo.id == photo.id).first()
+        if p:
+            p.user_rating = rating
+            p.rated_at = datetime.now()
+            # ALSO update tier so Story Studio can find keepers
+            if rating == "great":
+                p.tier = "great"
+            elif rating == "good":
+                p.tier = "good"
+            elif rating == "delete":
+                p.tier = "delete"
+        session.commit()
+        session.close()
+        st.session_state.rate_idx = idx + 1
+        st.rerun()
+
+    # Button CSS
+    st.markdown("""
+    <style>
+    div[data-testid="column"]:nth-child(1) button {
+        background-color: #2D5016 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        font-weight: 600 !important;
+        white-space: nowrap !important;
+    }
+    div[data-testid="column"]:nth-child(1) button * { color: #FFFFFF !important; }
+    div[data-testid="column"]:nth-child(2) button {
+        background-color: #C87020 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        font-weight: 600 !important;
+        white-space: nowrap !important;
+    }
+    div[data-testid="column"]:nth-child(2) button * { color: #FFFFFF !important; }
+    div[data-testid="column"]:nth-child(3) button {
+        background-color: #A83020 !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        font-weight: 600 !important;
+        white-space: nowrap !important;
+    }
+    div[data-testid="column"]:nth-child(3) button * { color: #FFFFFF !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    r1, r2, r3, r4 = st.columns(4)
+    with r1:
+        if st.button("⭐ Great", use_container_width=True, key="btn_great"):
+            rate("great")
+    with r2:
+        if st.button("👍 Good", use_container_width=True, key="btn_good"):
+            rate("good")
+    with r3:
+        if st.button("🗑 Delete", use_container_width=True, key="btn_delete"):
+            rate("delete")
+    with r4:
+        if st.button("→ Skip", use_container_width=True, key="btn_skip"):
+            st.session_state.rate_idx = idx + 1
+            st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════
+# PAGE: STORY STUDIO
+# ══════════════════════════════════════════════════════════════════════════
+elif page == "Story Studio":
+    st.markdown("<h1>Story Studio</h1>", unsafe_allow_html=True)
+
+    if not active_trip:
+        st.info("Select a trip first.")
+        st.stop()
+
+    session = get_session()
+    from sqlalchemy import or_
+    keepers = session.query(Photo).filter(
+        Photo.trip_id == active_trip.id,
+        or_(
+            Photo.tier.in_(["great", "good"]),
+            Photo.user_rating.in_(["great", "good"]),
+        )
+    ).order_by(Photo.composite_score.desc()).all()
+    session.close()
+
+    total_keepers = len(keepers)
+
+    st.markdown(
+        f"<div style='font-family:\"DM Mono\",monospace;font-size:9px;"
+        f"letter-spacing:0.12em;text-transform:uppercase;color:#9A8870;"
+        f"margin-bottom:4px;'>"
+        f"{active_trip.name} · {active_trip.created_at.strftime('%B %Y')} · "
+        f"{total_keepers} keepers</div>"
+        f"<div style='font-family:\"DM Mono\",monospace;font-size:9px;"
+        f"color:#C8BEA8;margin-bottom:24px;'>"
+        f"● Create narratives for your best photos and publish to social media</div>",
+        unsafe_allow_html=True
+    )
+
+    if not keepers:
+        st.info("No keepers yet — score photos in the Gallery first, then rate some as Great or Good.")
+        st.stop()
+
+    # Step 1: Select Photos
+    st.markdown(
+        "<div style='font-family:\"DM Mono\",monospace;font-size:9px;"
+        "letter-spacing:0.14em;text-transform:uppercase;color:#C8BEA8;"
+        "margin-bottom:10px;'>Step 1 — Select Your Photos</div>",
+        unsafe_allow_html=True
+    )
+
+    if "story_selected" not in st.session_state:
+        st.session_state.story_selected = []
+
+    photo_cols = st.columns(min(len(keepers), 5))
+    for i, kp in enumerate(keepers[:10]):
+        col_idx = i % 5
+        with photo_cols[col_idx]:
+            if kp.thumbnail_path and os.path.exists(kp.thumbnail_path):
+                src = thumb_src(kp.thumbnail_path)
+                is_selected = kp.id in st.session_state.story_selected
+                border_color = "#2D5016" if is_selected else "#E8E2D4"
+                check = "✓ " if is_selected else ""
+                st.markdown(
+                    f"<div style='border:2px solid {border_color};border-radius:6px;"
+                    f"overflow:hidden;margin-bottom:4px;'>"
+                    f"<img src='{src}' style='width:100%;height:70px;object-fit:cover;display:block;'></div>",
+                    unsafe_allow_html=True
+                )
+                if st.button(f"{check}{kp.filename[:10]} ({kp.composite_score:.0f})", key=f"sel_{kp.id}", use_container_width=True):
+                    if kp.id in st.session_state.story_selected:
+                        st.session_state.story_selected.remove(kp.id)
+                    else:
+                        st.session_state.story_selected.append(kp.id)
+                    st.rerun()
+
+    selected_count = len(st.session_state.story_selected)
+    st.markdown(
+        f"<div style='font-family:\"DM Mono\",monospace;font-size:11px;"
+        f"color:#9A8870;margin:12px 0 24px;'>"
+        f"{selected_count} of {min(total_keepers, 10)} photos selected · "
+        f"Recommended: 5–10 for carousel</div>",
+        unsafe_allow_html=True
+    )
+
+    # Step 2: Narrative Mode
+    st.markdown(
+        "<div style='font-family:\"DM Mono\",monospace;font-size:9px;"
+        "letter-spacing:0.14em;text-transform:uppercase;color:#C8BEA8;"
+        "margin-bottom:10px;'>Step 2 — Choose Narrative Style</div>",
+        unsafe_allow_html=True
+    )
+
+    narrative_mode = st.radio(
+        "Narrative Style",
+        ["🌿  Field Story", "📷  Hybrid (Story + Technical)", "⚙️  Technical"],
+        horizontal=True, index=1, label_visibility="collapsed"
+    )
+
+    st.markdown(
+        "<div style='font-family:\"DM Mono\",monospace;font-size:9px;"
+        "letter-spacing:0.1em;text-transform:uppercase;color:#9A8870;"
+        "margin-top:16px;margin-bottom:6px;'>"
+        "Your Field Notes (Optional — makes the story authentic)</div>",
+        unsafe_allow_html=True
+    )
+
+    field_notes = st.text_area(
+        "Field Notes",
+        placeholder="e.g. 'Waited 3 hrs at Dhikala meadow, tigress emerged 4:47 PM...'",
+        height=100, label_visibility="collapsed"
+    )
+
+    # Step 3: Generate
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    if selected_count == 0:
+        st.warning("Select at least 1 photo above to generate a story.")
+    else:
+        st.markdown("""
+        <style>
+        button[data-testid="baseButton-primary"] {
+            background-color: #2D5016 !important;
+            color: #FFFFFF !important;
+        }
+        button[data-testid="baseButton-primary"] * { color: #FFFFFF !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        generate_clicked = st.button("🧠  Generate Story", type="primary")
+
+        if generate_clicked or "story_output" in st.session_state:
+            if generate_clicked:
+                session = get_session()
+                sel_photos = session.query(Photo).filter(
+                    Photo.id.in_(st.session_state.story_selected)
+                ).order_by(Photo.composite_score.desc()).all()
+                session.close()
+
+                photo_context = []
+                for p in sel_photos:
+                    photo_context.append({
+                        "filename": p.filename, "score": p.composite_score,
+                        "tier": p.tier,
+                        "category": CATEGORY_LABELS.get(p.category, p.category or ""),
+                        "explanation": p.ai_explanation or "",
+                        "iso": p.exif_iso, "aperture": p.exif_aperture,
+                        "shutter": p.exif_shutter, "focal": p.exif_focal_len,
+                    })
+
+                mode_name = narrative_mode.split("  ")[-1]
+                prompt = f"""You are a wildlife photography storytelling assistant.
+Generate social media content for {selected_count} selected photos.
+
+Trip: {active_trip.name}
+Date: {active_trip.created_at.strftime('%B %Y')}
+Narrative style: {mode_name}
+Field notes: {field_notes if field_notes else 'No notes provided.'}
+
+Photos:
+"""
+                for i, ctx in enumerate(photo_context):
+                    prompt += f"\nPhoto {i+1}: {ctx['filename']} Score:{ctx['score']:.0f} Tier:{ctx['tier']} Category:{ctx['category']}\n  EXIF: ISO {ctx['iso']}, f/{ctx['aperture']}, {ctx['shutter']}s, {ctx['focal']}mm\n  AI: {ctx['explanation']}\n"
+
+                prompt += """
+Generate ALL:
+1. INSTAGRAM CAPTION (max 2000 chars)
+2. INSTAGRAM HASHTAGS: 15 relevant hashtags
+3. CAROUSEL ORDER: sequence recommendation
+4. WHATSAPP STATUS: one punchy line under 100 chars
+5. TWITTER/X POST: under 280 chars
+6. FACEBOOK POST: 3-4 sentences
+
+Format with headers: [INSTAGRAM CAPTION], [HASHTAGS], [CAROUSEL ORDER], [WHATSAPP], [TWITTER], [FACEBOOK]"""
+
+                with st.spinner("🧠 Crafting your story..."):
+                    try:
+                        from anthropic import Anthropic
+                        client = Anthropic()
+                        response = client.messages.create(
+                            model="claude-sonnet-4-6",
+                            max_tokens=2000,
+                            messages=[{"role": "user", "content": prompt}],
+                        )
+                        st.session_state.story_output = response.content[0].text
+                    except Exception as e:
+                        st.error(f"Error generating story: {e}")
+                        st.session_state.story_output = None
+
+            if st.session_state.get("story_output"):
+                story = st.session_state.story_output
+                st.markdown(
+                    "<div style='font-family:\"DM Mono\",monospace;font-size:9px;"
+                    "letter-spacing:0.14em;text-transform:uppercase;color:#C8BEA8;"
+                    "margin:24px 0 12px;'>Step 3 — Your Story</div>",
+                    unsafe_allow_html=True
+                )
+
+                platform = st.radio(
+                    "Platform",
+                    ["📸 Instagram", "💬 WhatsApp", "𝕏 Twitter", "📘 Facebook"],
+                    horizontal=True, label_visibility="collapsed"
+                )
+
+                import re
+                def extract_section(text, header):
+                    pattern = rf'\[{header}\](.*?)(\[|$)'
+                    match = re.search(pattern, text, re.DOTALL)
+                    return match.group(1).strip() if match else text
+
+                if "Instagram" in platform:
+                    caption = extract_section(story, "INSTAGRAM CAPTION")
+                    hashtags = extract_section(story, "HASHTAGS")
+                    carousel = extract_section(story, "CAROUSEL ORDER")
+
+                    col_l, col_r = st.columns(2)
+                    with col_l:
+                        st.markdown("**Carousel Order**")
+                        st.markdown(carousel)
+                        st.markdown(
+                            "<div style='background:#EEF5E8;border:1px solid #7A9E6A;"
+                            "border-radius:8px;padding:14px;margin-top:12px;'>"
+                            "<div style='font-size:11px;color:#2D5016;'>"
+                            "💡 Lead with eye-contact portrait. Best time: 7-9 AM IST. "
+                            "Carousels get 1.4× more reach.</div></div>",
+                            unsafe_allow_html=True
+                        )
+                    with col_r:
+                        st.markdown("**Caption**")
+                        st.markdown(caption)
+                        st.markdown("**Hashtags**")
+                        st.code(hashtags, language=None)
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.download_button("📋 Copy Caption", caption, "caption.txt", "text/plain", use_container_width=True)
+                        with c2:
+                            st.download_button("📋 Copy Hashtags", hashtags, "hashtags.txt", "text/plain", use_container_width=True)
+
+                elif "WhatsApp" in platform:
+                    whatsapp = extract_section(story, "WHATSAPP")
+                    st.markdown(f"<div style='background:#FFFFFF;border:1px solid #E8E2D4;border-radius:8px;padding:24px;'><div style='font-size:16px;color:#1A1610;font-weight:500;'>{whatsapp}</div></div>", unsafe_allow_html=True)
+                    st.download_button("📋 Copy", whatsapp, "whatsapp.txt", "text/plain")
+
+                elif "Twitter" in platform:
+                    twitter = extract_section(story, "TWITTER")
+                    st.markdown(f"<div style='background:#FFFFFF;border:1px solid #E8E2D4;border-radius:8px;padding:24px;'><div style='font-size:14px;color:#1A1610;'>{twitter}</div></div>", unsafe_allow_html=True)
+                    st.download_button("📋 Copy", twitter, "twitter.txt", "text/plain")
+
+                elif "Facebook" in platform:
+                    facebook = extract_section(story, "FACEBOOK")
+                    st.markdown(f"<div style='background:#FFFFFF;border:1px solid #E8E2D4;border-radius:8px;padding:24px;'><div style='font-size:14px;color:#1A1610;line-height:1.7;'>{facebook}</div></div>", unsafe_allow_html=True)
+                    st.download_button("📋 Copy", facebook, "facebook.txt", "text/plain")
+
+                st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+                if st.button("✏️  Regenerate Story", key="regen"):
+                    del st.session_state.story_output
+                    st.rerun()

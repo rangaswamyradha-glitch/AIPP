@@ -275,48 +275,107 @@ def ingest_folder(trip_id: str, folder: str,
 
     session.commit()
     session.close()
-         return {"total": total, "ingested": ingested, "skipped": skipped}
+    return {"total": total, "ingested": ingested, "skipped": skipped}
 def ingest_single_file(trip_id: str, filepath: str) -> dict:
     """
-    Ingest a single uploaded photo file.
-    Used by file uploader in New Trip page.
-    
-    Returns dict with success status and photo_id.
+    Ingest a single uploaded photo file (JPG/JPEG/PNG).
+    Robust version for file uploader.
     """
-    session = get_session()
-    seen_hashes = set()  # Empty set for single file (no duplicate check)
+    photo_id = str(uuid.uuid4())
+    filename = os.path.basename(filepath)
     
+    print(f"[INGEST] Starting: {filename}")
+
+    session = get_session()
+
     try:
-        photo = process_single(filepath, trip_id, seen_hashes)
-        
-        if photo:
-            session.add(photo)
-            session.commit()
-            
-            result = {
-                "success": True,
-                "photo_id": photo.id,
-                "skipped": photo.auto_deleted,
-                "reason": photo.skip_reason if photo.auto_deleted else None
-            }
-        else:
-            result = {
-                "success": False,
-                "photo_id": None,
-                "skipped": True,
-                "reason": "Failed to load image"
-            }
-        
-        return result
-        
+        # Step 1: Load image
+        img = Image.open(filepath).convert("RGB")
+        w, h = img.size
+        print(f"[INGEST] Loaded: {w}x{h}")
+
+        # Step 2: Create thumbnail
+        os.makedirs(THUMB_DIR, exist_ok=True)
+        thumb_path = os.path.join(THUMB_DIR, f"{photo_id}.jpg")
+        thumb = img.copy()
+        thumb.thumbnail(THUMBNAIL_SIZE, Image.LANCZOS)
+        thumb.save(thumb_path, "JPEG", quality=85)
+        print(f"[INGEST] Thumbnail saved: {thumb_path}")
+
+        # Step 3: RESIZE image before computing scores
+        # Blur and exposure algorithms need ~1000px images, not 8000px
+        score_img = img.copy()
+        score_img.thumbnail((1200, 1200), Image.LANCZOS)
+        print(f"[INGEST] Score image resized to: {score_img.size}")
+
+        # Step 4: Compute blur score on RESIZED image
+        try:
+            blur = compute_blur_score(score_img)
+        except Exception as e:
+            print(f"[INGEST] Blur score failed: {e}")
+            blur = 50.0
+        print(f"[INGEST] Blur score: {blur}")
+
+        # Step 5: Compute exposure score on RESIZED image
+        try:
+            exposure = compute_exposure_score(score_img)
+        except Exception as e:
+            print(f"[INGEST] Exposure score failed: {e}")
+            exposure = 50.0
+        print(f"[INGEST] Exposure score: {exposure}")
+
+        # Step 6: Extract EXIF
+        exif = {}
+        try:
+            exif = extract_exif(filepath)
+        except Exception:
+            pass
+        print(f"[INGEST] EXIF: ISO={exif.get('iso')}, f/{exif.get('aperture')}")
+
+        # Step 7: Create Photo record — ALWAYS set tier to "pending"
+        # Let the AI scorer decide what to keep or delete
+        # No auto-delete for uploaded files
+        photo = Photo(
+            id=photo_id,
+            trip_id=trip_id,
+            filename=filename,
+            filepath=filepath,
+            thumbnail_path=thumb_path,
+            blur_score=blur,
+            exposure_score=exposure,
+            image_width=w,
+            image_height=h,
+            exif_camera=exif.get("camera"),
+            exif_lens=exif.get("lens"),
+            exif_iso=exif.get("iso"),
+            exif_aperture=exif.get("aperture"),
+            exif_shutter=exif.get("shutter"),
+            exif_focal_len=exif.get("focal_length"),
+            exif_date=exif.get("date"),
+            tier="pending",
+        )
+
+        session.add(photo)
+        session.commit()
+        print(f"[INGEST] ✓ SUCCESS: {filename} → tier=pending, blur={blur}, exposure={exposure}")
+
+        return {
+            "success": True,
+            "photo_id": photo_id,
+            "skipped": False,
+            "reason": None,
+        }
+
     except Exception as e:
         session.rollback()
+        print(f"[INGEST] ✗ ERROR for {filename}: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "success": False,
             "photo_id": None,
             "skipped": True,
-            "reason": str(e)
+            "reason": f"{type(e).__name__}: {str(e)}",
         }
     finally:
-        session.close()  
-       
+        session.close()
