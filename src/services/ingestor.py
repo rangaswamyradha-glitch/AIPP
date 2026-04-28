@@ -31,10 +31,7 @@ RAW_EXTENSIONS = {
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi"}
 THUMBNAIL_SIZE  = (400, 267)
-THUMB_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "data", "thumbnails"
-)
+THUMB_DIR = os.path.join(os.getcwd(), "data", "thumbnails")
 os.makedirs(THUMB_DIR, exist_ok=True)
 
 
